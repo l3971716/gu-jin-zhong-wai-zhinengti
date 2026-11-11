@@ -4,9 +4,9 @@
 import json, ssl, sys, urllib.request
 from datetime import datetime, timezone, timedelta
 
-SSQ_URL = "https://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?name=ssq&issueCount=30"
+SSQ_URL = "https://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?name=ssq&issueCount=500"
 DLT_URL = ("https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry"
-           "?gameNo=85&provinceId=0&pageSize=30&isVerify=1&pageNo=1")
+           "?gameNo=85&provinceId=0&pageSize=100&isVerify=1&pageNo={page}")
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
@@ -42,14 +42,23 @@ def sync_ssq():
 
 
 def sync_dlt():
-    j = get(DLT_URL, "https://static.sporttery.cn/")
     rows = []
-    for o in ((j.get("value") or {}).get("list") or []):
-        nums = [int(x) for x in str(o.get("lotteryDrawResult", "")).split() if x.isdigit()]
-        if len(nums) >= 7:
-            rows.append({"q": str(o.get("lotteryDrawNum")), "d": str(o.get("lotteryDrawTime", ""))[:10],
-                         "f": nums[:5], "b": nums[5:7]})
-    return sorted(rows, key=lambda x: x["q"])
+    for page in range(1, 6):
+        j = get(DLT_URL.format(page=page), "https://static.sporttery.cn/")
+        for o in ((j.get("value") or {}).get("list") or []):
+            nums = [int(x) for x in str(o.get("lotteryDrawResult") or "").split()]
+            if len(nums) != 7:
+                continue
+            rows.append({
+                "q": str(o["lotteryDrawNum"]),
+                "d": str(o.get("lotteryDrawTime") or "")[:10],
+                "f": sorted(nums[:5]),
+                "b": sorted(nums[5:7]),
+            })
+    rows.sort(key=lambda x: x["q"])
+    if not rows:
+        raise RuntimeError("接口返回为空")
+    return rows
 
 
 def main():
