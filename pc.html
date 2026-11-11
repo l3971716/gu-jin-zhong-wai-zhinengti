@@ -1834,7 +1834,7 @@ function hj2BaziGo(){
 <button class="btn btn-gold lot-mode" data-mode="ssq" style="padding:8px 16px">双色球</button>
 <button class="btn lot-mode" data-mode="dlt" style="padding:8px 16px">大乐透</button>
 <select id="lotLook" style="padding:8px 10px;border:1px solid #b9ad93;border-radius:8px;background:#fff;font-size:14px;color:#2b2620"></select>
-<button class="btn btn-gold" id="lotPickBtn" style="padding:8px 16px">智策选号</button>
+<button class="btn btn-gold" id="lotPickBtn" style="padding:8px 16px">智策选号</button><button class="btn" id="lotRefreshBtn" style="padding:8px 16px">🔄 刷新最新</button><button class="btn" id="lotBacktestBtn" style="padding:8px 16px">🎯 回测校验</button>
 <span id="lotUpdated" style="font-size:12px;color:#7a7466"></span>
 </div>
 <div id="lotOut" style="color:#2b2620"></div>
@@ -15509,5 +15509,320 @@ PEOPLE.push({"id": 67524, "name": "夏宁邵", "category": "医药·疫苗", "er
 
 <script>/* R109b 人物注入后刷新筛选/计数 */ try{ if(window.buildCats){ buildCats(); renderCards(); updateNavCount(); } }catch(e){}</script>
 
+<script>/* LOTUP 彩票刷新+回测（R111） */
+/* ===== LOTUP 彩票：刷新最新数据 + 回测校准（R111）===== */
+(function(){
+  window.LOTUP = window.LOTUP || {best:{}};
+  var SSQ_API = function(n){ return 'https://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?name=ssq&issueCount='+n; };
+  var DLT_API = function(n){ return 'https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry?gameNo=85&provinceId=0&pageSize='+n+'&isVerify=1&pageNo=1'; };
+  var SYNC_SOURCES = [
+    './lottery.json',
+    'https://l3971716.github.io/gu-jin-zhong-wai-zhinengti/lottery.json',
+    'https://raw.githubusercontent.com/l3971716/gu-jin-zhong-wai-zhinengti/main/lottery.json',
+    'https://cdn.jsdelivr.net/gh/l3971716/gu-jin-zhong-wai-zhinengti@main/lottery.json'
+  ];
+  function fetchSync(){
+    var c=window.__lotSyncCache;
+    if(c && Date.now()-c.t<60000) return Promise.resolve(c.j);
+    var i=0;
+    function next(){
+      if(i>=SYNC_SOURCES.length) return Promise.reject(new Error('暂无可用数据源'));
+      var base=SYNC_SOURCES[i++];
+      var u=base+(base.indexOf('?')>=0?'&':'?')+'t='+Date.now();
+      return fetch(u,{cache:'no-store', mode:'cors'})
+        .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+        .then(function(j){
+          if(!j || (!(j.ssq&&j.ssq.length) && !(j.dlt&&j.dlt.length))) throw new Error('数据为空');
+          window.__lotSyncCache={t:Date.now(), j:j};
+          return j;
+        })
+        .catch(function(){ return next(); });
+    }
+    return next();
+  }
+
+  function rngRange(a,b){ var p=[],i; for(i=a;i<=b;i++) p.push(i); return p; }
+  function numsText(r,mode){
+    if(!r) return '';
+    return mode==='ssq' ? (r.r.join(' ')+' + '+r.b) : (r.f.join(' ')+' + '+r.b.join(' '));
+  }
+  function sortByIssue(rows){
+    return rows.slice().sort(function(a,b){ return String(a.q).localeCompare(String(b.q),'en',{numeric:true}); });
+  }
+
+  function fetchSSQ(n){
+    return fetchSync().then(function(j){
+      var rows=((j&&j.ssq)||[]).map(function(o){
+        return {q:String(o.q), d:String(o.d||'').slice(0,10), r:(o.r||[]).map(Number).slice(0,6), b:Number(o.b)||0};
+      }).filter(function(x){ return x.r.length===6 && x.b>=1; });
+      if(!rows.length) throw new Error('同步数据无开奖记录');
+      window.LOTUP.syncUpdated = j.updated||'';
+      return sortByIssue(rows);
+    }).catch(function(){
+    return fetch(SSQ_API(n), {cache:'no-store'})
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(j){
+        var arr=(j&&(j.result||j.data))||[];
+        var rows=arr.map(function(o){
+          return {q:String(o.code), d:String(o.date||'').slice(0,10),
+                  r:String(o.red||'').split(/[,，\s]+/).filter(Boolean).map(Number).slice(0,6),
+                  b:Number(String(o.blue||'').split(/[,，\s]+/)[0])||0};
+        }).filter(function(x){ return x.r.length===6 && x.b>=1; });
+        if(!rows.length) throw new Error('接口返回为空');
+        return sortByIssue(rows);
+      });
+    });
+  }
+  function fetchDLT(n){
+    return fetchSync().then(function(j){
+      var rows=((j&&j.dlt)||[]).map(function(o){
+        return {q:String(o.q), d:String(o.d||'').slice(0,10), f:(o.f||[]).map(Number).slice(0,5), b:(o.b||[]).map(Number).slice(0,2)};
+      }).filter(function(x){ return x.f.length===5 && x.b.length===2; });
+      if(!rows.length) throw new Error('同步数据无开奖记录');
+      window.LOTUP.syncUpdated = j.updated||'';
+      return sortByIssue(rows);
+    }).catch(function(){
+    return fetch(DLT_API(n), {cache:'no-store'})
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(j){
+        var arr=((j&&j.value&&j.value.list)||[]);
+        var rows=arr.map(function(o){
+          var nums=String(o.result||'').split(/\s+/).filter(Boolean).map(Number);
+          return {q:String(o.num), d:String(o.date||'').slice(0,10), f:nums.slice(0,5), b:nums.slice(5,7)};
+        }).filter(function(x){ return x.f.length===5 && x.b.length===2; });
+        if(!rows.length) throw new Error('接口返回为空');
+        return sortByIssue(rows);
+      });
+    });
+  }
+
+  function banner(ok,msg,cls){
+    var out=document.getElementById('lotOut'); if(!out) return;
+    var bg = ok ? '#eef7ef' : '#fbeeee', bd = ok ? '#b7d9be' : '#e2b8b8';
+    var h='<div style="background:'+bg+';border:1px solid '+bd+';border-radius:12px;padding:12px 16px;margin-bottom:12px;font-size:13.5px;line-height:1.8;color:#2b2620">'+msg+'</div>';
+    out.innerHTML = h + out.innerHTML;
+  }
+
+  /* ---------- 刷新最新数据 ---------- */
+  function silentSync(){
+    Promise.all([
+      fetchSSQ(30).catch(function(){ return null; }),
+      fetchDLT(30).catch(function(){ return null; })
+    ]).then(function(res){
+      var ssq=res[0], dlt=res[1], hit=[];
+      if(ssq&&ssq.length && ssq.length>(window.LOT_SSQ||[]).length){ window.LOT_SSQ=ssq; hit.push('双色球 '+ssq.length+'期'); }
+      if(dlt&&dlt.length && dlt.length>(window.LOT_DLT||[]).length){ window.LOT_DLT=dlt; hit.push('大乐透 '+dlt.length+'期'); }
+      if(!hit.length) return;
+      var mode=window.LOT_CUR||'ssq';
+      var rows=mode==='ssq'?window.LOT_SSQ:window.LOT_DLT;
+      var last=rows[rows.length-1];
+      window.LOTTERY_DATA = window.LOTTERY_DATA||{};
+      window.LOTTERY_DATA.updated = '已同步云端 · 最新 '+last.q+' 期（'+last.d+'）';
+      if(typeof renderLottery==='function') renderLottery(); else if(typeof lotRenderMode==='function') lotRenderMode();
+      var el=document.getElementById('lotUpdated');
+      if(el){ el.textContent='已同步 · 最新 '+last.q+' 期'; el.style.color='#2e6b4f'; }
+    }).catch(function(){});
+  }
+
+  function doRefresh(){
+    var btn=document.getElementById('lotRefreshBtn');
+    var mode = window.LOT_CUR || 'ssq';
+    if(btn){ btn.disabled=true; btn.textContent='刷新中…'; }
+    var job = Promise.all([
+      fetchSSQ(30).catch(function(){ return null; }),
+      fetchDLT(30).catch(function(){ return null; })
+    ]);
+    job.then(function(res){
+      var ssq=res[0], dlt=res[1], got=[];
+      if(ssq&&ssq.length){ window.LOT_SSQ=ssq; got.push('双色球 '+ssq.length+' 期'); }
+      if(dlt&&dlt.length){ window.LOT_DLT=dlt; got.push('大乐透 '+dlt.length+' 期'); }
+      if(!got.length) throw new Error('暂无可用数据源');
+      var cur=(mode==='ssq'?ssq:dlt)||ssq||dlt;
+      var last=cur[cur.length-1];
+      window.LOTTERY_DATA = window.LOTTERY_DATA || {};
+      window.LOTTERY_DATA.updated = '已刷新 · 最新 '+last.q+' 期（'+last.d+'）';
+      if(typeof renderLottery==='function') renderLottery(); else if(typeof lotRenderMode==='function') lotRenderMode();
+      banner(true,'✅ 已刷新：'+got.join('、')+' · 最新 <b>'+last.q+' 期</b>（'+last.d+'）　'+numsText(last,mode)
+        +'<br><span style="font-size:12px;color:#5c5646">数据源：中国福利彩票/中国体育彩票官方公告'
+        +(window.LOTUP.syncUpdated?' · 云端同步于 '+window.LOTUP.syncUpdated:'')
+        +' · 本地刷新 '+new Date().toLocaleString('zh-CN')+'</span>');
+    }).catch(function(e){
+      banner(false,'⚠ 刷新失败：'+String(e&&e.message||e)+'<br><span style="font-size:12px;color:#5c5646">可能被浏览器跨域或网络限制，已保留当前内置快照数据。可点「刷新」再试一次。</span>');
+    }).finally(function(){
+      if(btn){ btn.disabled=false; btn.textContent='🔄 刷新最新'; }
+    });
+  }
+
+  /* ---------- 回测引擎 ---------- */
+  function buildStats(win,mode){
+    var isM = mode==='ssq';
+    var PM = rngRange(1, isM?33:35), PB = rngRange(1, isM?16:12);
+    var f={}, fm={}, miss={};
+    PM.forEach(function(n){ f[n]=0; fm[n]=0; miss[n]=0; });
+    PB.forEach(function(n){ f['b'+n]=0; });
+    win.forEach(function(r){
+      var m = isM?r.r:r.f, b = isM?[r.b]:r.b;
+      m.forEach(function(n){ if(f[n]!==undefined) f[n]++; });
+      b.forEach(function(n){ if(f['b'+n]!==undefined) f['b'+n]++; });
+    });
+    PM.forEach(function(n){
+      var mm=0;
+      for(var j=win.length-1;j>=0;j--){
+        var t = isM?win[j].r:win[j].f;
+        if(t.indexOf(n)>=0) break;
+        mm++;
+      }
+      miss[n]=mm;
+    });
+    return {f:f, fm:fm, miss:miss, PM:PM, PB:PB};
+  }
+  function scoreOf(st,strat,n){
+    if(strat==='hot')  return st.f[n];
+    if(strat==='cold') return st.miss[n];
+    return st.f[n]*2.2 + st.miss[n]*1.1;
+  }
+  function pickMain(st,strat,cnt){
+    var cand=st.PM.slice().sort(function(a,b){
+      var d = scoreOf(st,strat,b)-scoreOf(st,strat,a);
+      return d!==0 ? d : a-b;
+    });
+    return cand.slice(0,cnt);
+  }
+  function pickBack(st,strat,cnt){
+    var cand=st.PB.slice().sort(function(a,b){
+      var k1='b'+a,k2='b'+b;
+      var d;
+      if(strat==='cold') d = st.f[k1]-st.f[k2];
+      else if(strat==='mix') d = (st.f[k2]*2.2)-(st.f[k1]*2.2);
+      else d = st.f[k2]-st.f[k1];
+      return d!==0 ? d : a-b;
+    });
+    return cand.slice(0,cnt);
+  }
+  function runBacktest(mode,rows){
+    var isM=mode==='ssq';
+    var cntM=isM?6:5, cntB=isM?1:2;
+    var WIN = rows.length>=40 ? 15 : 10;
+    var STRATS=[
+      {k:'hot',  name:'热号优先'},
+      {k:'cold', name:'遗漏回补'},
+      {k:'mix',  name:'智策混合(热2.2+遗漏1.1)'}
+    ];
+    var res={}; STRATS.forEach(function(s){ res[s.k]={name:s.name,hits:[],bHit:0,bTot:0,ge3:0,n:0}; });
+    if(rows.length < WIN+5) return null;
+    for(var i=WIN;i<rows.length;i++){
+      var win=rows.slice(i-WIN,i);
+      var st=buildStats(win,mode);
+      var actual = isM ? {m:rows[i].r, b:[rows[i].b]} : {m:rows[i].f, b:rows[i].b};
+      STRATS.forEach(function(S){
+        var main=pickMain(st,S.k,cntM), back=pickBack(st,S.k,cntB);
+        var hit=main.filter(function(n){ return actual.m.indexOf(n)>=0; }).length;
+        var R=res[S.k];
+        R.hits.push(hit); R.n++;
+        if(hit>=3) R.ge3++;
+        R.bTot++;
+        var okB=0;
+        back.forEach(function(n){ if(actual.b.indexOf(n)>=0) okB=1; });
+        if(okB) R.bHit++;
+      });
+    }
+    return {best:STRATS.map(function(S){
+      var R=res[S.k];
+      return {k:S.k,name:R.name,
+        avg:+(R.hits.reduce(function(a,b){return a+b;},0)/R.n).toFixed(2),
+        max:R.hits.reduce(function(a,b){return Math.max(a,b);},0),
+        ge3:R.ge3, n:R.n, ge3p:Math.round(R.ge3/R.n*100),
+        bRate:R.bTot?Math.round(R.bHit/R.bTot*100):0};
+    }).sort(function(a,b){ return b.avg-a.avg || b.bRate-a.bRate; })};
+  }
+
+  function doBacktest(){
+    var btn=document.getElementById('lotBacktestBtn');
+    var mode=window.LOT_CUR||'ssq';
+    if(btn){ btn.disabled=true; btn.textContent='回测中…'; }
+    var rows = sortByIssue((mode==='ssq'?window.LOT_SSQ:window.LOT_DLT)||[]);
+
+    function render(rows){
+      var bt=runBacktest(mode,rows);
+      if(!bt){
+        banner(false,'⚠ 回测失败：历史期数不足（当前 '+rows.length+' 期，至少需 '+(11+5)+' 期）。请先点「刷新最新」获取更多期数。');
+        return;
+      }
+      var best=bt.best[0];
+      window.LOTUP.best[mode]=best.k;
+      var isM=mode==='ssq';
+      var st=buildStats(rows.slice(-15),mode);
+      var rec=isM ?
+        {main:pickMain(st,best.k,6), back:pickBack(st,best.k,1)} :
+        {main:pickMain(st,best.k,5), back:pickBack(st,best.k,2)};
+
+      var tbl='<div class="db-table-wrap" style="overflow-x:auto;margin:10px 0"><table class="db-table"><thead><tr><th>策略</th><th>主区平均命中</th><th>最高命中</th><th>命中≥3 期数</th><th>≥3 占比</th><th>'+(isM?'蓝球':'后区')+'命中率</th></tr></thead><tbody>';
+      bt.best.forEach(function(r,i){
+        var hl = i===0 ? ' style="background:#f8f0dd;font-weight:700"' : '';
+        tbl+='<tr'+hl+'><td>'+r.name+(i===0?' ★':'')+'</td><td>'+r.avg+' 个</td><td>'+r.max+' 个</td><td>'+r.ge3+' / '+r.n+'</td><td>'+r.ge3p+'%</td><td>'+r.bRate+'%</td></tr>';
+      });
+      tbl+='</tbody></table></div>';
+
+      var html='<div class="db-sec" style="background:#fff;border:2px solid #2e6b4f;border-radius:14px;padding:16px;margin-bottom:12px">'
+        +'<h3 style="color:#2e6b4f;font-family:serif;letter-spacing:2px;margin:0 0 6px">回测校验 · '+(isM?'双色球':'大乐透')+'</h3>'
+        +'<div style="font-size:12.5px;color:#6b6556;margin-bottom:6px">滚动回测：用每期之前 15 期（少于40期时取10期）的冷热/遗漏统计选号，与实际开奖比对。共回测 '+best.n+' 期。</div>'
+        +tbl
+        +'<div style="font-size:13px;background:#f2f7f3;border:1px solid #cfe3d4;border-radius:10px;padding:12px;line-height:1.9">'
+        +'<b style="color:#2e6b4f">回测最优策略：'+best.name+'</b>（主区平均命中 '+best.avg+' 个，≥3 命中率 '+best.ge3p+'%，后区 '+best.bRate+'%）'
+        +'<br>已将该策略设为「智策选号」的默认权重，下一注按此生成：'
+        +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0">'
+        +rec.main.slice().sort(function(a,b){return a-b;}).map(function(n){ return '<span style="width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:'+(typeof DB_WX_COLOR!=='undefined'?DB_WX_COLOR[lotWx(n)]:'#a83226')+';color:#fff;font-weight:700;font-size:16px">'+n+'</span>'; }).join('')
+        +'<span style="color:#a83226;font-size:18px;font-weight:700">+</span>'
+        +rec.back.slice().sort(function(a,b){return a-b;}).map(function(n){ return '<span style="width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:#2e6b4f;color:#fff;font-weight:700;font-size:16px">'+n+'</span>'; }).join('')
+        +'</div>'
+        +'<b style="color:#a83226">重要说明</b>：回测只能证明某策略在历史数据上的命中表现，<b>不能保证下一期</b>。每注理论中奖概率恒定，开奖为独立随机事件，请理性购彩。'
+        +'</div></div>';
+      var out=document.getElementById('lotOut');
+      if(out) out.innerHTML = html + out.innerHTML;
+    }
+
+    if(rows.length>=16){ render(rows); if(btn){btn.disabled=false;btn.textContent='🎯 回测校验';} return; }
+    var job = mode==='ssq'? fetchSSQ(40): fetchDLT(40);
+    job.then(function(more){
+      var rows2=sortByIssue(more);
+      if(mode==='ssq') window.LOT_SSQ=rows2; else window.LOT_DLT=rows2;
+      window.LOTTERY_DATA=window.LOTTERY_DATA||{};
+      var last=rows2[rows2.length-1];
+      window.LOTTERY_DATA.updated='已刷新 · 最新 '+last.q+' 期（'+last.d+'）';
+      if(typeof renderLottery==='function') renderLottery();
+      render(rows2);
+    }).catch(function(e){
+      banner(false,'⚠ 回测需要更多历史数据，但接口拉取失败：'+String(e&&e.message||e)+'<br>已用当前内置 '+rows.length+' 期数据计算（期数偏少，结论仅供参考）。');
+      if(rows.length>=16) render(rows);
+    }).finally(function(){
+      if(btn){ btn.disabled=false; btn.textContent='🎯 回测校验'; }
+    });
+  }
+
+  /* ---------- 用回测最优策略接管选号 ---------- */
+  window.lotPickSet = function(mode,cntMain,cntBack){
+    var rows=sortByIssue((mode==='ssq'?window.LOT_SSQ:window.LOT_DLT)||[]);
+    var strat=(window.LOTUP.best||{})[mode]||'mix';
+    var st=buildStats(rows.slice(-15),mode);
+    var main=pickMain(st,strat,cntMain), back=pickBack(st,strat,cntBack);
+    var wx={水:0,火:0,木:0,金:0,土:0};
+    main.concat(back).forEach(function(n){ wx[lotWx(n)]++; });
+    return {main:main.sort(function(a,b){return a-b;}), back:back.sort(function(a,b){return a-b;}), wx:wx};
+  };
+
+  /* ---------- 绑定按钮 ---------- */
+  function bind(){
+    var r=document.getElementById('lotRefreshBtn');
+    var b=document.getElementById('lotBacktestBtn');
+    if(r) r.onclick=doRefresh;
+    if(b) b.onclick=doBacktest;
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bind); else bind();
+  setTimeout(silentSync, 1500);
+  window.LOTUP.refresh=doRefresh;
+  window.LOTUP.backtest=doBacktest;
+})();
+
+</script>
 </body>
 </html>
