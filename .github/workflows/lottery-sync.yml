@@ -1,0 +1,42 @@
+name: Sync Lottery Data
+
+on:
+  schedule:
+    - cron: '30 14 * * *'   # 每天 22:30 北京时间（开奖后）
+    - cron: '30 15 * * *'   # 每天 23:30 北京时间（兜底）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "lottery-sync"
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Fetch latest draw data
+        run: python3 sync_lottery.py
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "lottery-sync-bot"
+          git config user.email "lottery-sync-bot@users.noreply.github.com"
+          git add lottery.json
+          if git diff --quiet --cached; then
+            echo "数据无变化，跳过提交"
+          else
+            git commit -m "chore: 同步彩票开奖数据 $(date -u '+%Y-%m-%d %H:%M UTC')"
+            git pull --rebase origin main || true
+            git push
+          fi
