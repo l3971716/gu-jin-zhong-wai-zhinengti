@@ -8,21 +8,29 @@ SSQ_URL = "https://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNoti
 DLT_URL = ("https://webapi.sporttery.cn/gateway/lottery/getHistoryPageListV1.qry"
            "?gameNo=85&provinceId=0&pageSize=30&isVerify=1&pageNo=1")
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
 
 
-def get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://www.cwl.gov.cn/"})
+def get(url, referer):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA,
+        "Referer": referer,
+        "Origin": referer.rstrip("/"),
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "X-Requested-With": "XMLHttpRequest",
+        "Connection": "keep-alive",
+    })
     with urllib.request.urlopen(req, timeout=25, context=ctx) as r:
         return json.loads(r.read().decode("utf-8", "ignore"))
 
 
 def sync_ssq():
-    j = get(SSQ_URL)
+    j = get(SSQ_URL, "https://www.cwl.gov.cn/kjxx/ssq/kjgg/")
     rows = []
     for o in (j.get("result") or j.get("data") or []):
         red = [int(x) for x in str(o.get("red", "")).replace("，", ",").split(",") if x.strip().isdigit()]
@@ -34,7 +42,7 @@ def sync_ssq():
 
 
 def sync_dlt():
-    j = get(DLT_URL)
+    j = get(DLT_URL, "https://static.sporttery.cn/")
     rows = []
     for o in ((j.get("value") or {}).get("list") or []):
         nums = [int(x) for x in str(o.get("lotteryDrawResult", "")).split() if x.isdigit()]
@@ -45,22 +53,40 @@ def sync_dlt():
 
 
 def main():
+    old = {}
+    try:
+        with open("lottery.json", encoding="utf-8") as f:
+            old = json.load(f)
+    except Exception:
+        pass
+
     out = {"updated": "", "ssq": [], "dlt": [], "errors": []}
+    fresh = 0
     for name, fn in (("ssq", sync_ssq), ("dlt", sync_dlt)):
         try:
             rows = fn()
             if not rows:
                 raise RuntimeError("接口返回为空")
             out[name] = rows
+            fresh += 1
             print(f"{name}: {len(rows)} 期，最新 {rows[-1]['q']}（{rows[-1]['d']}）")
         except Exception as e:
             out["errors"].append(f"{name}: {e}")
-            print(f"{name} 同步失败: {e}", file=sys.stderr)
+            kept = old.get(name) or []
+            out[name] = kept
+            print(f"{name} 同步失败({e})，保留已有 {len(kept)} 期", file=sys.stderr)
+
     tz = timezone(timedelta(hours=8))
     out["updated"] = datetime.now(tz).strftime("%Y-%m-%d %H:%M")
+
+    if fresh == 0:
+        print("两个彩种均未取到新数据，不写入文件（避免空数据覆盖）", file=sys.stderr)
+        return 0
+
     with open("lottery.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
     print("written lottery.json, updated", out["updated"], "errors", out["errors"])
+    return 0
 
 
 if __name__ == "__main__":
